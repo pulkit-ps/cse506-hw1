@@ -1,0 +1,94 @@
+README
+
+
+BUILD and INSTALL:
+        -Inside the hw1/ directory run the command make to build the system call.
+        -On successfull completion of the make command run sh install_modules sh to install the modules.
+        -Run the system call using the command ./xmergesort [-flags] outputfile.txt inputfile1.txt inputfile2.txt 
+
+DESIGN
+	 Userspace 	
+	 	- user space program accepts the command line arguments and copies them into a user space char *structure
+	 	- the appropriate flag bit is set, using getopt(), depending upon user choice.
+	 	- further the validations on various flags are made 
+	 	- if an invalid flag or a invalid combination of flag (example -ua) is passed the system call does not run at all and an error is returned.
+	 	- there is no default behavior of the program either of -u or -a has to be passed for the system call to run.
+	 	- the input arguments are checked if they are NULL or not.
+	  	- incase of any of the above mentioned check fails, the system call returns -1 and fails.
+	 	- if all the validations in user space are passed the userland program calls the system call via syscall(__NR_xmergesort,(void *)inp) 
+	 	- where (void *) inp is the userland pointer to the the files and flags.
+	 	- once the system call returns,depending upon the return value.
+	 		- if syscall returns zero, program checks for the d flag if set, it retruns the number of records written else just returns 0 indicating a success
+	 		- if returns a negative value. syscall failed and programs returns -1.
+
+	 Kernelspace
+File Validations
+	 	- The arguments recieved are from user space, therefore they are copied to a kernel space structure using copy_from_user. 
+	 	- The memory validations likepointer to bad addresses are done using copy_from_user
+	 	- The aruguments then passed to a file_validation function which performs further validations like null arguments passed. 
+	 	- input files are checked using the vfs_stat() function.
+	 	- if the fil_validaton() function returns an error the program exits. else it continues
+	 	- next step is to allocate two buffers for reading the contents of the input files and 1 wrtie buffer to store the merged records for writing.
+	 	- if the memory is not allocated to the buffer then and -ENOMEM error is retunred and sys call exits.
+	 	- 2 sepearte buffers prev_str1, prev_str2 are also allocated to store prev string of the files to handle the t-flag coditions.
+	 	- all the buffers are memset() by '\0' so that the garbage values are ignored when readinf from or wrting to buffers.
+Checking for FILE permissions:- 	 	
+	 	- next the two input files are opened using the filp_fopen() in O_RDONLY mode.
+	  	- if the files can't be be opened.. error is thrown 
+Checking for same input files:-
+		- to check if the user has given same input file for both the files (filp1->f_inode==filp2->f_inode) checks the same and returns and -EBADF error
+Core Merge logic
+FILE READ OUTER LOOP
+		- after all the validations are performed on the the core logic of the programs begins.
+		- an outer while loop to read files equal to PAGE_SIZE runs until the bytes_read from either of the files is less than page size. if bytes_read read is  less than page size it indicates that the complete file has been read hence coresponding flag to signify file read  complete is set.
+Read File logic 
+		- initially vfs_read() is used to read contents into a buffer equal to PAGE SIZE for both the files.vfs_read returns the bytes read
+		-if bytes_read<0 error is thrown and cleanup is performed.
+		- if bytes_read = PAGE SIZE then logic to handle partial line read is implemented 
+				 -if a complete page size is read it may be a case that the last line (record) may or may not have been read completely (ie upto "\n"). 					therefore  the buffer is traversed in reverse and the f_pos offest (that holds the last position read) is shifted to the  last "					\n" found. so that the partial line will read in complete in the next page read.
+		- if bytes_read<PAGE SIZE  then read read in complete is set to true 
+MERGE FILES INNER LOOP
+		-each record is delimited by a new line . Therefore charsep(&buffer, "\n") funtion is used to sepearte records from the buffer 
+		-strcmp() is used to compare to records from two files. 
+		- the files are merged according to the various flag conditions set. in ascending order.
+		- as soon as any one of the buffer becomes "NULL" that is, it exhauts all its records the control goes back to the outer loop which check which of the two  buffers is empty and refills it.
+		- the sorted records instead of writing each record to the output file are stored in a write_buf. and written to the outfile once the program exits the
+			loops.
+
+DESCRIPTION OF VARIOUS FLAGS
+		-u for the records being compared of file1 & file2. if the the record of file1 is same as that of file2 output only one copy.
+		-a for the records being compared of file1 & file2. if the the record of file1 is same as that of file2 output both.
+		-i compare records case-insensitive (case sensitive by default). If this flag is set then strcasecmp() is used instead of strcmp() to copare records.
+		-t if any input file is found NOT to be sorted, the syscall stops and returns an -EINVAL error. if the t flag is not set the prog carries on without caring  about the sort status of file and just merges them on relative merit.
+		-d the number of records being sorted are returned to user space using copy_to_user if d flag is set.
+
+The program assumes no default beahvior, which means it is neccessary to give either one of -u or -a flag else it throws an error. also -ua is an invalid combination of flags hence and error is thrown in this case also.
+
+-once either one of the files is read and written after sorting into the write_buf the program exits from the loops
+-writ_buf is passed to the wrpfs_write() function to write the buffer into the output file.
+-next logic to first write the remaining contents of the  other buffer is implemented.
+-next while loop is run to read the files which has not read compeletly and store the records in write_buf and finally written on the outputfile.
+
+In the cleanup (out) section 
+-all the buffers used are freed.
+-if an error occurs the partial output file is deleted using vfs_unlink()
+-if a file is open is closed.
+-and appropriate value from the system call is returned. (returns 0 if syscall implemented successfully).
+
+FILES:-
+	README
+	xmergesort.c
+	sys_xmergesort.c
+	kernel.config
+	Makefile
+	install_module.sh
+
+	
+
+REFERENCES:-  
+1. http://lxr.free-electrons.com/source/include/linux/fs.h?v=3.19#L1438
+2. http://lxr.free-electrons.com/source/fs/read_write.c
+3. http://man7.org/linux/man-pages/man3/opterr.3.html
+4. http://lxr.free-electrons.com/source/Documentation/filesystems/vfs.txt
+
+
